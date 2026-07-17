@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Essen: Лови слова рукой!</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #2c3e50;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            color: white;
+        }
+
+        #game-container {
+            position: relative;
+            width: 960px;
+            height: 540px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 12px;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #video-element {
+            display: none;
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 15px 25px;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .stat-box {
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 24px;
+            font-weight: bold;
+            border: 2px solid rgba(255,255,255,0.2);
+        }
+
+        #score-box { color: #2ecc71; }
+        #lives-box { color: #e74c3c; }
+
+        #start-screen, #game-over-screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+            z-index: 10;
+        }
+
+        .hidden { display: none !important; }
+
+        h1 { margin-bottom: 10px; color: #f1c40f; font-size: 42px; }
+        p { font-size: 20px; color: #ecf0f1; text-align: center; max-width: 700px; line-height: 1.5; }
+
+        .btn {
+            margin-top: 30px;
+            padding: 15px 50px;
+            font-size: 26px;
+            font-weight: bold;
+            color: white;
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
+        }
+
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(46, 204, 113, 0.6);
+        }
+
+        .btn-restart {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            box-shadow: 0 4px 15px rgba(52, 152, 219, 0.4);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <video id="video-element" playsinline></video>
+        <canvas id="game-canvas" width="960" height="540"></canvas>
+        
+        <div id="ui-overlay">
+            <div id="score-box" class="stat-box">Очки: 0</div>
+            <div id="lives-box" class="stat-box">Жизни: ❤️❤️❤️</div>
+        </div>
+
+        <div id="start-screen">
+            <h1>🍎 Лови слова: Essen</h1>
+            <p>Управляй корзинкой с помощью <b>указательного пальца</b>.<br>
+            Лови только слова, связанные с <b>едой (Essen)</b>!<br>
+            Избегай лишних слов.</p>
+            <button id="start-btn" class="btn">Старт</button>
+        </div>
+
+        <div id="game-over-screen" class="hidden">
+            <h1>Игра окончена!</h1>
+            <p id="final-score">Твой счет: 0</p>
+            <button id="restart-btn" class="btn btn-restart">Играть снова</button>
+        </div>
+    </div>
+
+    <!-- MediaPipe CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <script>
+        // --- НАСТРОЙКИ СЛОВ ---
+        const foodWords = [
+            "Apfel", "Brot", "Käse", "Milch", "Ei", "Fleisch", "Fisch", 
+            "Reis", "Nudel", "Obst", "Gemüse", "Wasser", "Tee", "Kuchen", 
+            "Salat", "Kartoffel", "Suppe", "Butter", "Zucker", "Saft"
+        ];
+        
+        const badWords = [
+            "Auto", "Buch", "Hund", "Katze", "Haus", "Baum", "Stuhl", 
+            "Tisch", "Computer", "Schuh", "Ball", "Sonne", "Uhr", "Fenster",
+            "Tür", "Stift", "Handy", "Lampe", "Bett", "Spiegel"
+        ];
+
+        // --- ПЕРЕМЕННЫЕ ИГРЫ ---
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const videoElement = document.getElementById('video-element');
+        const scoreEl = document.getElementById('score-box');
+        const livesEl = document.getElementById('lives-box');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreEl = document.getElementById('final-score');
+
+        let score = 0;
+        let lives = 3;
+        let gameRunning = false;
+        let words = [];
+        let floatingTexts = []; // Для анимации +10 / -10
+        
+        // Игрок (корзинка)
+        let player = { x: canvas.width / 2, y: canvas.height - 80, targetX: canvas.width / 2, width: 100, height: 60 };
+        let handDetected = false;
+
+        // Таймер спавна
+        let spawnTimer = 0;
+        const spawnInterval = 120; // Кадров между появлением слов (при 60fps = 2 сек)
+
+        // --- MEDIAPIPE SETUP ---
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        hands.onResults((results) => {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const indexFingerTip = results.multiHandLandmarks[0][8];
+                // Инвертируем X для зеркального эффекта
+                player.targetX = (1 - indexFingerTip.x) * canvas.width;
+                handDetected = true;
+            } else {
+                handDetected = false;
+            }
+        });
+
+        // --- ЛОГИКА ИГРЫ ---
+        class FallingWord {
+            constructor() {
+                this.isFood = Math.random() > 0.4; // 60% шанс правильного слова
+                this.text = this.isFood 
+                    ? foodWords[Math.floor(Math.random() * foodWords.length)]
+                    : badWords[Math.floor(Math.random() * badWords.length)];
+                
+                this.x = Math.random() * (canvas.width - 120) + 60;
+                this.y = -40;
+                // Медленная скорость падения (от 1.0 до 2.0 пикселей за кадр)
+                this.speed = 1.0 + Math.random() * 1.0; 
+                this.width = 0; // Вычислим при отрисовке
+                this.height = 36;
+                this.caught = false;
+            }
+
+            update() {
+                this.y += this.speed;
+            }
+
+            draw() {
+                ctx.font = "bold 22px 'Segoe UI', sans-serif";
+                this.width = ctx.measureText(this.text).width + 30;
+                
+                // Фон плашки
+                ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+                ctx.beginPath();
+                ctx.roundRect(this.x - this.width/2, this.y - this.height/2, this.width, this.height, 18);
+                ctx.fill();
+                
+                // Текст
+                ctx.fillStyle = "#2c3e50";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(this.text, this.x, this.y);
+            }
+        }
+
+        class FloatingText {
+            constructor(x, y, text, color) {
+                this.x = x;
+                this.y = y;
+                this.text = text;
+                this.color = color;
+                this.life = 1.0; // Прозрачность от 1 до 0
+                this.vy = -2; // Движение вверх
+            }
+            update() {
+                this.y += this.vy;
+                this.life -= 0.02;
+            }
+            draw() {
+                ctx.globalAlpha = Math.max(0, this.life);
+                ctx.font = "bold 28px sans-serif";
+                ctx.fillStyle = this.color;
+                ctx.textAlign = "center";
+                ctx.fillText(this.text, this.x, this.y);
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        function spawnWord() {
+            words.push(new FallingWord());
+        }
+
+        function updateUI() {
+            scoreEl.textContent = `Очки: ${score}`;
+            let hearts = "";
+            for(let i=0; i<lives; i++) hearts += "❤️";
+            livesEl.textContent = `Жизни: ${hearts}`;
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            finalScoreEl.textContent = `Твой итоговый счет: ${score}`;
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function resetGame() {
+            score = 0;
+            lives = 3;
+            words = [];
+            floatingTexts = [];
+            player.x = canvas.width / 2;
+            player.targetX = canvas.width / 2;
+            updateUI();
+            gameOverScreen.classList.add('hidden');
+            gameRunning = true;
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- ГЛАВНЫЙ ЦИКЛ ---
+        function gameLoop() {
+            if (!gameRunning) return;
+
+            // 1. Очистка и фон (видео)
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.drawImage(videoElement, -canvas.width, 0, canvas.width, canvas.height);
+            ctx.restore();
+
+            // Затемнение для читаемости
+            ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 2. Плавное движение игрока
+            player.x += (player.targetX - player.x) * 0.15;
+            // Ограничение по краям
+            player.x = Math.max(player.width/2, Math.min(canvas.width - player.width/2, player.x));
+
+            // 3. Отрисовка игрока (Корзинка)
+            ctx.fillStyle = handDetected ? "rgba(241, 196, 15, 0.8)" : "rgba(150, 150, 150, 0.5)";
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            // Рисуем форму корзинки
+            ctx.moveTo(player.x - player.width/2, player.y - player.height/2);
+            ctx.lineTo(player.x + player.width/2, player.y - player.height/2);
+            ctx.lineTo(player.x + player.width/2 - 10, player.y + player.height/2);
+            ctx.quadraticCurveTo(player.x, player.y + player.height/2 + 15, player.x - player.width/2 + 10, player.y + player.height/2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            if (!handDetected) {
+                ctx.fillStyle = "#fff";
+                ctx.font = "20px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText("Покажи указательный палец!", player.x, player.y - 40);
+            }
+
+            // 4. Спавн слов
+            spawnTimer++;
+            if (spawnTimer >= spawnInterval) {
+                spawnWord();
+                spawnTimer = 0;
+            }
+
+            // 5. Обновление и отрисовка слов
+            for (let i = words.length - 1; i >= 0; i--) {
+                let w = words[i];
+                w.update();
+                w.draw();
+
+                // Проверка столкновения с корзинкой (простая проверка прямоугольника и точки)
+                if (!w.caught && 
+                    w.y + w.height/2 >= player.y - player.height/2 && 
+                    w.y - w.height/2 <= player.y + player.height/2 &&
+                    w.x >= player.x - player.width/2 && 
+                    w.x <= player.x + player.width/2) {
+                    
+                    w.caught = true;
+                    if (w.isFood) {
+                        score += 10;
+                        floatingTexts.push(new FloatingText(w.x, w.y, "+10", "#2ecc71"));
+                    } else {
+                        score -= 10;
+                        lives--;
+                        floatingTexts.push(new FloatingText(w.x, w.y, "-10", "#e74c3c"));
+                    }
+                    words.splice(i, 1);
+                    updateUI();
+                    if (lives <= 0) gameOver();
+                    continue;
+                }
+
+                // Если слово упало мимо
+                if (w.y > canvas.height + 50) {
+                    if (w.isFood) {
+                        score -= 5; // Штраф за пропуск еды
+                        floatingTexts.push(new FloatingText(w.x, canvas.height - 50, "Мимо! -5", "#f39c12"));
+                        updateUI();
+                    }
+                    words.splice(i, 1);
+                }
+            }
+
+            // 6. Обновление и отрисовка всплывающего текста
+            for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                let ft = floatingTexts[i];
+                ft.update();
+                ft.draw();
+                if (ft.life <= 0) floatingTexts.splice(i, 1);
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- УПРАВЛЕНИЕ ---
+        document.getElementById('start-btn').addEventListener('click', async () => {
+            document.getElementById('start-btn').textContent = 'Загрузка камеры...';
+            try {
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => { await hands.send({ image: videoElement }); },
+                    width: 1280,
+                    height: 720
+                });
+                await camera.start();
+                startScreen.classList.add('hidden');
+                resetGame();
+            } catch (err) {
+                alert("Ошибка доступа к камере. Убедитесь, что используете локальный сервер (http://localhost), а не file://");
+                document.getElementById('start-btn').textContent = 'Старт';
+            }
+        });
+
+        document.getElementById('restart-btn').addEventListener('click', () => {
+            resetGame();
+        });
+
+    </script>
+</body>
+</html>
